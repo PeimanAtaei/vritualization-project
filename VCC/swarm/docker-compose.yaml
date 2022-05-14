@@ -1,0 +1,203 @@
+version: '3.3'
+
+services:
+  revproxy:
+  # https://hub.docker.com/_/traefik
+    image: "traefik:v2.5"
+    container_name: "traefik"
+    command:
+      # - "--log.level=DEBUG"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      #- "--certificatesresolvers.myresolver.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.myresolver.acme.email=pariabalf@gmail.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    depends_on:
+      - cms
+    deploy:
+      mode: replicated
+      replicas: 3
+    networks:
+      - external
+      - internal
+    volumes:
+      - "./letsencrypt:/letsencrypt"
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  mariadb:
+    image: mariadb:10.4.0
+    container_name: "mariadb"
+    environment:
+      MYSQL_USER: drupal
+      MYSQL_PASSWORD: drupal
+      MYSQL_DATABASE: drupal
+      MYSQL_ROOT_PASSWORD: ''
+      MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+    restart: always
+    volumes:
+      - mysqlV:/var/lib/mysql
+    ports:
+      - '3306:3306'
+    expose:
+      - '3306'
+    deploy:
+      mode: replicated
+      replicas: 3
+    networks:
+      - internal
+
+  pmy:
+    image: phpmyadmin/phpmyadmin
+    container_name: "pmy"
+    depends_on:
+      - mariadb
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 1
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pmy.rule=Host(`pmy.localdomain`)"
+      - "traefik.http.routers.pmy.entrypoints=websecure"
+      - "traefik.http.routers.pmy.tls.certresolver=myresolver"
+    networks:
+     - internal
+    deploy:
+      mode: replicated
+      replicas: 3
+  
+  drupal:
+    build:
+      context: ./
+      dockerfile: Dockerfile-drupal
+    image: drupal
+    environment:
+      DRUPAL_PASSWORD: "drupal"
+      DRUPAL_DATABASE_PASSWORD: "drupal"
+      DRUPAL_DATABASE_NAME: "drupal"
+      DRUPAL_DATABASE_USER: "drupal"
+      ALLOW_EMPTY_PASSWORD: "yes"
+    container_name: "drupal"
+    depends_on:
+      - mariadb
+    restart: unless-stopped
+    networks:
+      - internal
+    volumes:
+      - drupal-data:/var/www/html
+    deploy:
+      mode: replicated
+      replicas: 3
+  cms:
+    image: nginx:latest
+    volumes:
+      - drupal-data:/var/www/html
+      - ./nginx-conf:/etc/nginx/conf.d
+    depends_on:
+      - drupal
+    container_name: "cms"
+    deploy:
+      mode: replicated
+      replicas: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cms.rule=Host(`www.localdomain`)"
+      - "traefik.http.routers.cms.entrypoints=websecure"
+      - "traefik.http.routers.cms.tls.certresolver=myresolver"
+      - "traefik.backend.loadbalancer.sticky=true"
+    networks:
+      - internal
+
+  elasticsearch:
+    environment:
+      - xpack.security.enabled=false
+      - discovery.type=single-node
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.4.0
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    cap_add:
+     - IPC_LOCK
+    networks:
+      - internal
+    ports:
+      - 9200:9200
+    restart: unless-stopped
+    volumes:
+      - elasticsearch:/usr/share/elasticsearch/data:rw
+    deploy:
+      mode: replicated
+      replicas: 3
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.4.0
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    depends_on:
+      - elasticsearch
+    deploy:
+      mode: replicated
+      replicas: 3
+    networks:
+      - internal
+
+  logspout:
+    image: bekt/logspout-logstash
+    environment:
+        ROUTE_URIS: 'logstash://logstash:80'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - logstash
+    networks:
+      - internal
+    deploy:
+      mode: replicated
+      replicas: 3
+
+
+  kibana:
+    container_name: kibana
+    depends_on:
+      - elasticsearch
+    environment:
+      xpack.monitoring.collection.enabled: "true"
+      SERVER_NAME: mon.localdomain
+      ELASTICSEARCH_HOSTS: '["http://192.168.58.11:9200","http://192.168.58.12:9200","http://192.168.58.13:9200"]'
+    image: docker.elastic.co/kibana/kibana:7.4.0
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kibana.rule=Host(`mon.localdomain`)"
+      - "traefik.http.routers.kibana.entrypoints=websecure"
+      - "traefik.http.routers.kibana.tls.certresolver=myresolver"
+    networks:
+      - internal
+    deploy:
+      mode: replicated
+      replicas: 3
+    restart: unless-stopped
+
+
+networks:
+  external:
+    external:
+      name: external
+  internal:
+    external:
+      name: internal
+volumes:
+  drupal-data:
+  mysqlV:
+  elasticsearch:

@@ -1,0 +1,138 @@
+---
+- hosts: all
+  any_errors_fatal: true
+  become: true
+  roles:
+    # ansible-galaxy install mrlesmithjr.netplan
+    - role: mrlesmithjr.netplan
+      become: true
+      # This role will do nothing unless netplan_enabled is true.
+      netplan_enabled: true
+      # The default is /etc/netplan/config.yaml.
+      netplan_config_file: /etc/netplan/00-installer-config.yaml
+      # Ubuntu 18.04, for example, defaults to using networkd.
+      netplan_renderer: networkd
+      # Simple network configuration to add a single network
+      # interface.
+      netplan_configuration:
+        network:
+          version: 2
+          ethernets:
+            ens37:
+              addresses:
+                - "{{ ansible_host }}/24"
+              gateway4: 192.168.58.2
+              nameservers:
+                addresses:
+                  - 10.0.2.3
+                  - 8.8.8.8
+                  - 8.8.4.4
+            ens33:
+              addresses:
+                - "192.168.255.11/24"
+            ens38:
+              addresses:
+                - "10.255.255.11/24"
+  tasks:
+    - name: Adjust ens38 for vm3
+      delegate_to: '192.168.58.13'
+      replace:
+        path: /etc/netplan/00-installer-config.yaml
+        regexp: '- 10.255.255.11/24'
+        replace: '- 10.255.255.13/24'
+
+    - name: Adjust ens33 for vm3.
+      delegate_to: '192.168.58.13'
+      replace:
+        path: /etc/netplan/00-installer-config.yaml
+        regexp: '- 192.168.255.11/24'
+        replace: '- 192.168.255.13/24'
+
+    - name: Adjust ens38 for vm2.
+      delegate_to: '192.168.58.12'
+      replace:
+        path: /etc/netplan/00-installer-config.yaml
+        regexp: '- 10.255.255.11/24'
+        replace: '- 10.255.255.12/24'
+
+    - name: Adjust ens33 for vm2.
+      delegate_to: '192.168.58.12'
+      replace:
+        path: /etc/netplan/00-installer-config.yaml
+        regexp: '- 192.168.255.11/24'
+        replace: '- 192.168.255.12/24'
+
+    - name: Set the hostname.
+      hostname:
+        name: "{{ ansible_hostname }}.localdomain"
+
+    - name: Display the changed config
+      debug:
+        msg: "The new hostname is {{ ansible_hostname }}.localdomain and the OS is {{ ansible_host }}"
+
+    # Set ip forwarding on in /proc and in the sysctl file and reload if necessary
+    # https://docs.ansible.com/ansible/2.9_ja/modules/sysctl_module.html
+    - sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: yes
+        state: present
+        reload: yes
+
+    # masquerade: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/iptables_module.html
+    - name: Masquerade traffic from vm2 and vm3.
+      iptables:
+        table: nat
+        chain: POSTROUTING
+        out_interface: ens37
+        jump: MASQUERADE
+
+    - name: Create a trusted storage pool
+      gluster.gluster.gluster_peer:
+        state: present
+        nodes:
+             - vm1g
+             - vm2g
+             - vm3g
+
+    - name: Create Gluster volume
+      ignore_errors: yes
+      shell: gluster volume create gfs replica 3 transport tcp vm1g:/gluster/bricks/1/brick vm2g:/gluster/bricks/2/brick vm3g:/gluster/bricks/3/brick
+      run_once: true
+
+    - name: Start Gluster volume
+      shell: gluster volume start gfs
+      run_once: true
+
+    - name: Set security configration
+      shell: gluster volume set gfs auth.allow 10.255.255.11,10.255.255.12,10.255.255.13
+      run_once: true
+
+    - name: Create a mountpoint
+      shell: mkdir /data
+
+    - name:  Add a fstab entry.
+      shell: echo 'vm1g:gfs /data glusterfs defaults,_netdev,backupvolfile-server=localhost 0 0' >> /etc/fstab
+    
+    - name: mount the volume
+      shell: mount -a
+
+    - name: Create primary swarm manager
+      delegate_to: vm1
+      shell: docker swarm init --advertise-addr ens37
+      run_once: true
+
+    - name: Get docker swarm manager token
+      delegate_to: vm1
+      shell: docker swarm join-token -q worker
+      register: swarm_worker_token
+
+    - name: To add vm2 as a worker to this swarm
+      delegate_to: vm2
+      shell: docker swarm join --token {{ swarm_worker_token.stdout }} 192.168.58.11:2377
+      run_once: true
+
+    - name: To add vm3 as a worker to this swarm
+      delegate_to: vm3
+      shell: docker swarm join --token {{ swarm_worker_token.stdout }} 192.168.58.11:2377
+      run_once: true
