@@ -69,23 +69,19 @@
     - name: Display the changed config
       debug:
         msg: "The new hostname is {{ ansible_hostname }}.localdomain and the OS is {{ ansible_host }}"
-
-    # Set ip forwarding on in /proc and in the sysctl file and reload if necessary
-    # https://docs.ansible.com/ansible/2.9_ja/modules/sysctl_module.html
-    - sysctl:
-        name: net.ipv4.ip_forward
-        value: '1'
-        sysctl_set: yes
+   
+    - name: Ensure dependencies are installed.
+      apt:
+        name: dirmngr
         state: present
-        reload: yes
 
-    # masquerade: https://docs.ansible.com/ansible/latest/collections/ansible/builtin/iptables_module.html
-    - name: Masquerade traffic from vm2 and vm3.
-      iptables:
-        table: nat
-        chain: POSTROUTING
-        out_interface: ens37
-        jump: MASQUERADE
+    - name: install GlusterFS and enable it.
+      shell: sudo apt-get install glusterfs-server -y && sudo systemctl start glusterd && sudo systemctl enable glusterd
+
+
+    - name: peer with other node.
+      shell: sudo gluster peer probe vm2 && sudo gluster peer probe vm3
+      run_once: true
 
     - name: Create a trusted storage pool
       gluster.gluster.gluster_peer:

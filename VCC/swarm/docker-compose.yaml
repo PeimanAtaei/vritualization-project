@@ -25,9 +25,6 @@ services:
       - "8080:8080"
     depends_on:
       - cms
-    deploy:
-      mode: replicated
-      replicas: 3
     networks:
       - external
       - internal
@@ -51,9 +48,6 @@ services:
       - '3306:3306'
     expose:
       - '3306'
-    deploy:
-      mode: replicated
-      replicas: 3
     networks:
       - internal
 
@@ -63,7 +57,7 @@ services:
     depends_on:
       - mariadb
     environment:
-      PMA_HOST: mysql
+      PMA_HOSTS: 192.168.58.11,192.168.58.12,192.168.58.13
       PMA_PORT: 3306
       PMA_ARBITRARY: 1
     restart: always
@@ -74,10 +68,7 @@ services:
       - "traefik.http.routers.pmy.tls.certresolver=myresolver"
     networks:
      - internal
-    deploy:
-      mode: replicated
-      replicas: 3
-  
+
   drupal:
     build:
       context: ./
@@ -97,20 +88,15 @@ services:
       - internal
     volumes:
       - drupal-data:/var/www/html
-    deploy:
-      mode: replicated
-      replicas: 3
   cms:
-    image: nginx:latest
+    image: bit3/nginx-waf:latest
     volumes:
+      - /gfs:/data
       - drupal-data:/var/www/html
       - ./nginx-conf:/etc/nginx/conf.d
     depends_on:
       - drupal
     container_name: "cms"
-    deploy:
-      mode: replicated
-      replicas: 3
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.cms.rule=Host(`www.localdomain`)"
@@ -119,6 +105,8 @@ services:
       - "traefik.backend.loadbalancer.sticky=true"
     networks:
       - internal
+    deploy:
+      replicas: 1
 
   elasticsearch:
     environment:
@@ -140,7 +128,7 @@ services:
       - elasticsearch:/usr/share/elasticsearch/data:rw
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 1
   logstash:
     image: docker.elastic.co/logstash/logstash:7.4.0
     volumes:
@@ -149,14 +137,14 @@ services:
       - elasticsearch
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 1
     networks:
       - internal
 
   logspout:
     image: bekt/logspout-logstash
     environment:
-        ROUTE_URIS: 'logstash://logstash:80'
+        ROUTE_URIS: 'logstash://logstash:5000'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -165,9 +153,7 @@ services:
       - internal
     deploy:
       mode: replicated
-      replicas: 3
-
-
+      replicas: 1
   kibana:
     container_name: kibana
     depends_on:
@@ -186,17 +172,22 @@ services:
       - internal
     deploy:
       mode: replicated
-      replicas: 3
+      replicas: 1
     restart: unless-stopped
-
 
 networks:
   external:
-    external:
-      name: external
+    driver: overlay
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.100.0/24
   internal:
-    external:
-      name: internal
+    driver: overlay
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.200.0/24
 volumes:
   drupal-data:
   mysqlV:

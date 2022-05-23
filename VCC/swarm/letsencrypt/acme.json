@@ -1,0 +1,19 @@
+{
+    "myresolver": {
+      "Account": {
+        "Email": "pariabalf@gmail.com",
+        "Registration": {
+          "body": {
+            "status": "valid",
+            "contact": [
+              "mailto:pariabalf@gmail.com"
+            ]
+          },
+          "uri": "https://acme-v02.api.letsencrypt.org/acme/acct/516775487"
+        },
+        "PrivateKey": "MIIJKQIBAAKCAgEA4t4ZQyUfv1wMgy1zP4j+SwroHlM8X6UF9jHlReAzH10Z/sq9pwW/Wda1XG4YH1Hqk20sfwoR2vtxOSJy0VKFMQKnGyDFAkV6pFFUxBKxuXxWRP19qiqy4oGpqu6lr0sv2D>      "KeyType": "4096"
+      },
+      "Certificates": null
+    }
+  }
+  
